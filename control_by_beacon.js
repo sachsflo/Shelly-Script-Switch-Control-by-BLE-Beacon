@@ -13,6 +13,8 @@ let Anwesend = false;
 
 console.log(Anwesend);
 
+let timerId = null; // Variable zur Speicherung der Timer-ID
+
 BLE.Scanner.Subscribe(function (ev, res) {
     if (ev === BLE.Scanner.SCAN_RESULT) {
         let room = "Büro";
@@ -26,60 +28,54 @@ BLE.Scanner.Subscribe(function (ev, res) {
             let distance = (res.rssi + 40) / -15;
             distance = distance < 0.1 ? 0.1 : distance;
 
-            // Extrahiert die Bezeichnung der Mac-Adresse aus dem Array
             macLabel = targetMacAddresses[macAddress] || "Unbekannt";
             
-            // Schaltet den Switch ein
-            Shelly.call("Switch.set", {'id': 0, 'on': true});
-			
-			// Setzt die Anwesenheitsvariable auf Wahr
-			Anwesend = true;
-			console.log(Anwesend);
+            console.log(Anwesend);
 
-            // Setzt den Zeitstempel der letzten Erkennung
-            lastDetectionTimestamp = Date.now();
-            
-            console.log(topic, id, macLabel, distance);
-            console.log("Switch geschaltet");
-            
-            // Veröffentlicht die Beacon-Informationen über MQTT mit der Bezeichnung der Mac-Adresse
-            if (MQTT.publish(topic, '{ "id": "' + id + '", "Bezeichnung":"' + macLabel + '", "distance":' + distance + ', "Anwesend":' + Anwesend + ' }')) {
-                console.log('veröffentlicht');
+            if (!Anwesend) {
+                Shelly.call("Switch.set", {'id': 0, 'on': true});
+                Anwesend = true;
+                console.log("Switch eingeschaltet");
+
+                // Startet den Timer nur, wenn er nicht bereits läuft
+                if (!timerId) {
+                    timerId = Timer.set(10000, true, checkAndTurnOffSwitch);
+                }
             }
 
-            // Überprüft die Anwesenheitsvariable und startet den Timer nur, wenn Anwesend ist
-            if (Anwesend) {
-                // Startet den Timer für die Überprüfung
-                Timer.set(10000, true, checkAndTurnOffSwitch); // Startet die Überprüfung alle 10 Sekunden
+            lastDetectionTimestamp = Date.now();
+            console.log(topic, id, macLabel, distance);
+
+            if (MQTT.publish(topic, '{ "id": "' + id + '", "Bezeichnung":"' + macLabel + '", "distance":' + distance + ', "Anwesend":' + Anwesend + ' }')) {
+                console.log('veröffentlicht');
             }
         }
     }
 });
 
-// Überprüft, ob der Switch ausgeschaltet werden soll
 function checkAndTurnOffSwitch() {
-    // Überprüft, ob Anwesend gleich true ist
     if (Anwesend) {
         const currentTime = Date.now();
-        const timeDifference = (currentTime - lastDetectionTimestamp) / 1000; // Zeitdifferenz in Sekunden
-        
-        if (timeDifference >= 60) {
-            // Schaltet den Switch aus, wenn mehr als 60 Sekunden keine Erkennung erfolgt ist
+        const timeDifference = (currentTime - lastDetectionTimestamp) / 1000;
+
+        if (timeDifference >= 120) {
             Shelly.call("Switch.set", {'id': 0, 'on': false});
-            Anwesend = false; // Aktualisiert die globale Variable
-            console.log("Switch ausgeschaltet nach 60 Sekunden Inaktivität");
-            
-            // Veröffentlicht eine MQTT-Nachricht, wenn der Switch ausgeschaltet wurde, im gleichen Format wie beim Einschalten
+            Anwesend = false;
+            console.log("Switch ausgeschaltet nach 120 Sekunden Inaktivität");
+
             let room = "Büro";
             let topic = "espresense/rooms/" + room;
             if (MQTT.publish(topic, '{ "id": "' + id + '", "Bezeichnung":"' + macLabel + '", "distance": "N/A", "Anwesend":' + Anwesend + ' }')) {
                 console.log('Switch ausgeschaltet veröffentlicht');
             }
+
+            // Stopp den Timer und setzt die Timer-ID zurück
+            Timer.clear(timerId);
+            timerId = null;
         }
     }
 }
 
-// Startet den Bluetooth-Scanner
 BLE.Scanner.Start({
     duration_ms: -1,
     active: false,
@@ -89,7 +85,6 @@ BLE.Scanner.Start({
 
 console.log('Skript gestartet');
 
-// Überprüft die MQTT-Verbindung
 if (MQTT.isConnected()) {
     console.log('MQTT ist verbunden');
 }
